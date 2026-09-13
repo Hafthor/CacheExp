@@ -107,7 +107,7 @@ public sealed class CacheTests {
 
     [TestMethod]
     public void BasicLruTest() {
-        Cache<int> c = new(3, () => DateTime.UnixEpoch);
+        Cache<int> c = new(3, () => DateTime.MinValue);
         // add a,b,c
         Assert.AreEqual(1, c.Fetch("a", () => 1, OneSecond));
         Assert.AreEqual(2, c.Fetch("b", () => 2, OneSecond));
@@ -124,7 +124,7 @@ public sealed class CacheTests {
     
     [TestMethod]
     public async Task Async_BasicLruTest() {
-        Cache<int> c = new(3, () => DateTime.UnixEpoch);
+        Cache<int> c = new(3, () => DateTime.MinValue);
         // add a,b,c
         Assert.AreEqual(1, await c.FetchAsync("a", () => Task.FromResult(1), OneSecond));
         Assert.AreEqual(2, await c.FetchAsync("b", () => Task.FromResult(2), OneSecond));
@@ -144,7 +144,7 @@ public sealed class CacheTests {
     [TestMethod]
     [DoNotParallelize]
     public void Stampede_ConcurrentMissesInvokeFactoryOnce() {
-        Cache<int> c = new(100, () => DateTime.UnixEpoch);
+        Cache<int> c = new(100, () => DateTime.MinValue);
         
         int factoryCalls = 0;
         Func<int> valueFactory = () => {
@@ -172,7 +172,7 @@ public sealed class CacheTests {
     [TestMethod]
     [DoNotParallelize]
     public void Async_Stampede_ConcurrentMissesInvokeFactoryOnce() {
-        Cache<int> c = new(100, () => DateTime.UnixEpoch);
+        Cache<int> c = new(100, () => DateTime.MinValue);
         
         int factoryCalls = 0;
         Func<Task<int>> valueFactory = async () => {
@@ -199,7 +199,7 @@ public sealed class CacheTests {
     [TestMethod]
     [DoNotParallelize]
     public void Stampede_ConcurrentExpiredRefreshInvokesFactoryOnce() {
-        DateTime curTime = DateTime.UnixEpoch;
+        DateTime curTime = DateTime.MinValue;
         Cache<int> c = new(100, () => curTime);
 
         // Prime the cache with a short-lived value.
@@ -229,7 +229,7 @@ public sealed class CacheTests {
     [TestMethod]
     [DoNotParallelize]
     public async Task Async_Stampede_ConcurrentExpiredRefreshInvokesFactoryOnce() {
-        DateTime curTime = DateTime.UnixEpoch;
+        DateTime curTime = DateTime.MinValue;
         Cache<int> c = new(100, () => curTime);
 
         await c.FetchAsync("k", () => Task.FromResult(1), OneSecond); // prime
@@ -259,7 +259,7 @@ public sealed class CacheTests {
     [DoNotParallelize]
     public void ThreadSafety_ConcurrentDistinctKeysAreConsistent() {
         const int keys = 200, threadsPerKey = 8;
-        Cache<int> c = new(keys + 1, () => DateTime.UnixEpoch); // large enough to avoid eviction
+        Cache<int> c = new(keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
 
         var perKeyCalls = new int[keys];
         using var ready = new ManualResetEventSlim(false);
@@ -291,7 +291,7 @@ public sealed class CacheTests {
     [DoNotParallelize]
     public void Async_ThreadSafety_ConcurrentDistinctKeysAreConsistent() {
         const int keys = 200, callersPerKey = 8;
-        Cache<int> c = new(keys + 1, () => DateTime.UnixEpoch); // large enough to avoid eviction
+        Cache<int> c = new(keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
 
         var perKeyCalls = new int[keys];
         using var ready = new ManualResetEventSlim(false);
@@ -323,7 +323,7 @@ public sealed class CacheTests {
     [TestMethod]
     [DoNotParallelize]
     public void ThreadSafety_EvictionUnderContentionDoesNotCorrupt() {
-        Cache<int> c = new(10, () => DateTime.UnixEpoch); // tiny cache -> constant eviction churn
+        Cache<int> c = new(10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
 
         int mismatches = 0, exceptions = 0;
         using var ready = new ManualResetEventSlim(false);
@@ -349,7 +349,7 @@ public sealed class CacheTests {
     [TestMethod]
     [DoNotParallelize]
     public void Async_ThreadSafety_EvictionUnderContentionDoesNotCorrupt() {
-        Cache<int> c = new(10, () => DateTime.UnixEpoch); // tiny cache -> constant eviction churn
+        Cache<int> c = new(10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
 
         int mismatches = 0, exceptions = 0;
         using var ready = new ManualResetEventSlim(false);
