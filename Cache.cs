@@ -1,5 +1,10 @@
 ﻿namespace CacheExp;
 
+public interface ICache<T> {
+    T Fetch(string key, Func<T> valueFactory, TimeSpan timeToLive);
+    Task<T> FetchAsync(string key, Func<Task<T>> valueFactory, TimeSpan timeToLive);
+}
+
 /// <summary>
 /// Cache implementation backed by OrderedDictionary. Internally, OrderedDictionary is
 /// a hash combined with a list. This makes LRU eviction and promotion performance poor since
@@ -14,7 +19,7 @@
 /// ARM-based Apple Silicon, where this was built.
 /// <see href="https://github.com/tpn/pdfs/blob/master/Memory%20Barriers%20-%20a%20Hardware%20View%20for%20Software%20Hackers%20(July%2023%2C%202010).pdf"/>
 /// </remarks>
-public readonly struct Cache<T>(int maxItems, Func<DateTime> nowProvider) {
+public readonly struct Cache<T>(int maxItems, Func<DateTime> nowProvider) : ICache<T> {
     private class CacheEntry {
         public T Value;
         public long Expires; // ticks
@@ -71,14 +76,96 @@ public readonly struct Cache<T>(int maxItems, Func<DateTime> nowProvider) {
     }
 }
 
+/// <summary>
+/// Cache implementation backed by Dictionary and a LinkedList. This results in good LRU eviction and
+/// promotion performance since these are O(1) operations on the LinkedList.
+/// </summary>
+/// <param name="maxItems">Maximum number of items in the cache before LRU eviction.</param>
+/// <param name="nowProvider">Current time provider to use when checking or calculating expiry.</param>
+/// <typeparam name="T">Type of data to be cached.</typeparam>
+/// <remarks>
+/// Note that we use Volatile.Read/.Write when accessing Expires. This is to protect against
+/// a race condition caused by memory reference reordering done by modern processors, in particular
+/// ARM-based Apple Silicon, where this was built.
+/// <see href="https://github.com/tpn/pdfs/blob/master/Memory%20Barriers%20-%20a%20Hardware%20View%20for%20Software%20Hackers%20(July%2023%2C%202010).pdf"/>
+/// </remarks>
+public readonly struct Cache2<T>(int maxItems, Func<DateTime> nowProvider) : ICache<T> {
+    private class CacheEntry(string key) {
+        public readonly string Key = key; // need key to know which dictionary entry to evict
+        public T Value;
+        public long Expires; // ticks
+        public readonly SemaphoreSlim Semaphore = new(1); // instead of object lock for non-thread affine async methods
+    }
+
+    private readonly Dictionary<string, LinkedListNode<CacheEntry>> _cache = new();
+    private readonly LinkedList<CacheEntry> _lru = new();
+
+    public T Fetch(string key, Func<T> valueFactory, TimeSpan timeToLive) {
+        if (EntryValue(key, out CacheEntry entry, out T entryValue)) return entryValue;
+
+        entry.Semaphore.Wait(); // per-key lock
+        try {
+            if (Volatile.Read(ref entry.Expires) > nowProvider().Ticks) return entry.Value; // stampede fetch?
+            T val = entry.Value = valueFactory(); // actually get value
+            Volatile.Write(ref entry.Expires, (nowProvider() + timeToLive).Ticks); // set expiry after getting value
+            return val;
+        } finally {
+            entry.Semaphore.Release();
+        }
+    }
+
+    public async Task<T> FetchAsync(string key, Func<Task<T>> valueFactory, TimeSpan timeToLive) {
+        if (EntryValue(key, out CacheEntry entry, out T entryValue)) return entryValue;
+
+        if (!await entry.Semaphore.WaitAsync(timeToLive)) return await valueFactory(); // per-key lock
+        try {
+            if (Volatile.Read(ref entry.Expires) > nowProvider().Ticks) return entry.Value; // stampede fetch?
+            T val = entry.Value = await valueFactory(); // actually get value
+            Volatile.Write(ref entry.Expires, (nowProvider() + timeToLive).Ticks); // set expiry after getting value
+            return val;
+        } finally {
+            entry.Semaphore.Release();
+        }
+    }
+
+    private bool EntryValue(string key, out CacheEntry entry, out T entryValue) {
+        long now = nowProvider().Ticks;
+        lock (_cache) {
+            if (!_cache.TryGetValue(key, out var node)) {
+                entry = new CacheEntry(key); // create/add empty entry for key
+                _cache[key] = node = new(entry);
+                _lru.AddFirst(node); // add to lru chain
+                while (_cache.Count > maxItems) { // shrink cache if necessary
+                    _cache.Remove(_lru.Last.Value.Key);
+                    _lru.RemoveLast();
+                }
+            } else {
+                entry = node.Value;
+                if (Volatile.Read(ref entry.Expires) > now) {
+                    if (node != _lru.First) {
+                        _lru.Remove(node); // move to front...
+                        _lru.AddFirst(node); // ...of lru chain
+                    }
+                    entryValue = entry.Value;
+                    return true;
+                }
+            }
+        }
+        entryValue = default;
+        return false;
+    }
+}
+
 [TestClass]
 public sealed class CacheTests {
     private static readonly TimeSpan OneSecond = TimeSpan.FromSeconds(1), OneMinute = TimeSpan.FromMinutes(1);
     
     [TestMethod]
-    public void BasicSmokeTest() {
+    [DataRow(true)]
+    [DataRow(false)]
+    public void BasicSmokeTest(bool two) {
         DateTime curTime = DateTime.MinValue;
-        Cache<int> c = new(5, () => curTime);
+        ICache<int> c = two ? new Cache2<int>(5, () => curTime) : new Cache<int>(5, () => curTime);
         
         int counter = 0;
         Func<int> factory = () => Interlocked.Increment(ref counter);
@@ -91,9 +178,11 @@ public sealed class CacheTests {
     }
 
     [TestMethod]
-    public async Task Async_BasicSmokeTest() {
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task Async_BasicSmokeTest(bool two) {
         DateTime curTime = DateTime.MinValue;
-        Cache<int> c = new(5, () => curTime);
+        ICache<int> c = two ? new Cache2<int>(5, () => curTime) : new Cache<int>(5, () => curTime);
         
         int counter = 0;
         Func<Task<int>> factory = () => Task.FromResult(Interlocked.Increment(ref counter));
@@ -106,8 +195,10 @@ public sealed class CacheTests {
     }
 
     [TestMethod]
-    public void BasicLruTest() {
-        Cache<int> c = new(3, () => DateTime.MinValue);
+    [DataRow(true)]
+    [DataRow(false)]
+    public void BasicLruTest(bool two) {
+        ICache<int> c = two ? new Cache2<int>(3, () => DateTime.MinValue) : new Cache<int>(3, () => DateTime.MinValue);
         // add a,b,c
         Assert.AreEqual(1, c.Fetch("a", () => 1, OneSecond));
         Assert.AreEqual(2, c.Fetch("b", () => 2, OneSecond));
@@ -123,8 +214,10 @@ public sealed class CacheTests {
     }
     
     [TestMethod]
-    public async Task Async_BasicLruTest() {
-        Cache<int> c = new(3, () => DateTime.MinValue);
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task Async_BasicLruTest(bool two) {
+        ICache<int> c = two ? new Cache2<int>(3, () => DateTime.MinValue) : new Cache<int>(3, () => DateTime.MinValue);
         // add a,b,c
         Assert.AreEqual(1, await c.FetchAsync("a", () => Task.FromResult(1), OneSecond));
         Assert.AreEqual(2, await c.FetchAsync("b", () => Task.FromResult(2), OneSecond));
@@ -143,8 +236,10 @@ public sealed class CacheTests {
     // invoke the factory once, and all callers must observe the same value.
     [TestMethod]
     [DoNotParallelize]
-    public void Stampede_ConcurrentMissesInvokeFactoryOnce() {
-        Cache<int> c = new(100, () => DateTime.MinValue);
+    [DataRow(true)]
+    [DataRow(false)]
+    public void Stampede_ConcurrentMissesInvokeFactoryOnce(bool two) {
+        ICache<int> c = two ? new Cache2<int>(100, () => DateTime.MinValue) : new Cache<int>(100, () => DateTime.MinValue);
         
         int factoryCalls = 0;
         Func<int> valueFactory = () => {
@@ -171,8 +266,10 @@ public sealed class CacheTests {
     // exactly once and all observe the same value.
     [TestMethod]
     [DoNotParallelize]
-    public void Async_Stampede_ConcurrentMissesInvokeFactoryOnce() {
-        Cache<int> c = new(100, () => DateTime.MinValue);
+    [DataRow(true)]
+    [DataRow(false)]
+    public void Async_Stampede_ConcurrentMissesInvokeFactoryOnce(bool two) {
+        ICache<int> c = two ? new Cache2<int>(100, () => DateTime.MinValue) : new Cache<int>(100, () => DateTime.MinValue);
         
         int factoryCalls = 0;
         Func<Task<int>> valueFactory = async () => {
@@ -198,9 +295,11 @@ public sealed class CacheTests {
     // callers must recompute the value only once, not once per caller.
     [TestMethod]
     [DoNotParallelize]
-    public void Stampede_ConcurrentExpiredRefreshInvokesFactoryOnce() {
+    [DataRow(true)]
+    [DataRow(false)]
+    public void Stampede_ConcurrentExpiredRefreshInvokesFactoryOnce(bool two) {
         DateTime curTime = DateTime.MinValue;
-        Cache<int> c = new(100, () => curTime);
+        ICache<int> c = two ? new Cache2<int>(100, () => curTime) : new Cache<int>(100, () => curTime);
 
         // Prime the cache with a short-lived value.
         c.Fetch("k", () => 1, OneSecond);
@@ -228,9 +327,11 @@ public sealed class CacheTests {
     // expired entry must recompute it exactly once.
     [TestMethod]
     [DoNotParallelize]
-    public async Task Async_Stampede_ConcurrentExpiredRefreshInvokesFactoryOnce() {
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task Async_Stampede_ConcurrentExpiredRefreshInvokesFactoryOnce(bool two) {
         DateTime curTime = DateTime.MinValue;
-        Cache<int> c = new(100, () => curTime);
+        ICache<int> c = two ? new Cache2<int>(100, () => curTime) : new Cache<int>(100, () => curTime);
 
         await c.FetchAsync("k", () => Task.FromResult(1), OneSecond); // prime
         curTime += OneSecond; // force expiry
@@ -257,9 +358,11 @@ public sealed class CacheTests {
     // correct value, and each key's factory must run exactly once (no eviction here).
     [TestMethod]
     [DoNotParallelize]
-    public void ThreadSafety_ConcurrentDistinctKeysAreConsistent() {
+    [DataRow(true)]
+    [DataRow(false)]
+    public void ThreadSafety_ConcurrentDistinctKeysAreConsistent(bool two) {
         const int keys = 200, threadsPerKey = 8;
-        Cache<int> c = new(keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
+        ICache<int> c = two ? new Cache2<int>(keys + 1, () => DateTime.MinValue) : new Cache<int>(keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
 
         var perKeyCalls = new int[keys];
         using var ready = new ManualResetEventSlim(false);
@@ -289,9 +392,11 @@ public sealed class CacheTests {
     // each get their own correct value, and each key's factory must run exactly once.
     [TestMethod]
     [DoNotParallelize]
-    public void Async_ThreadSafety_ConcurrentDistinctKeysAreConsistent() {
+    [DataRow(true)]
+    [DataRow(false)]
+    public void Async_ThreadSafety_ConcurrentDistinctKeysAreConsistent(bool two) {
         const int keys = 200, callersPerKey = 8;
-        Cache<int> c = new(keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
+        ICache<int> c = two ? new Cache2<int>(keys + 1, () => DateTime.MinValue) : new Cache<int>(keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
 
         var perKeyCalls = new int[keys];
         using var ready = new ManualResetEventSlim(false);
@@ -322,8 +427,10 @@ public sealed class CacheTests {
     // and many keys must not deadlock, throw, or corrupt entries.
     [TestMethod]
     [DoNotParallelize]
-    public void ThreadSafety_EvictionUnderContentionDoesNotCorrupt() {
-        Cache<int> c = new(10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
+    [DataRow(true)]
+    [DataRow(false)]
+    public void ThreadSafety_EvictionUnderContentionDoesNotCorrupt(bool two) {
+        ICache<int> c = two ? new Cache2<int>(10, () => DateTime.MinValue) : new Cache<int>(10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
 
         int mismatches = 0, exceptions = 0;
         using var ready = new ManualResetEventSlim(false);
@@ -348,8 +455,10 @@ public sealed class CacheTests {
     
     [TestMethod]
     [DoNotParallelize]
-    public void Async_ThreadSafety_EvictionUnderContentionDoesNotCorrupt() {
-        Cache<int> c = new(10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
+    [DataRow(true)]
+    [DataRow(false)]
+    public void Async_ThreadSafety_EvictionUnderContentionDoesNotCorrupt(bool two) {
+        ICache<int> c = two ? new Cache2<int>(10, () => DateTime.MinValue) : new Cache<int>(10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
 
         int mismatches = 0, exceptions = 0;
         using var ready = new ManualResetEventSlim(false);
