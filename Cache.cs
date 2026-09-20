@@ -29,7 +29,7 @@ public readonly struct Cache<T>(int maxItems, Func<DateTime> nowProvider) : ICac
     private readonly OrderedDictionary<string, CacheEntry> _cache = new();
 
     public T Fetch(string key, Func<T> valueFactory, TimeSpan timeToLive) {
-        if (EntryValue(key, out CacheEntry entry, out T entryValue)) return entryValue;
+        if (EntryValue(key, out CacheEntry entry)) return entry.Value;
 
         entry.Semaphore.Wait(); // per-key lock
         try {
@@ -43,7 +43,7 @@ public readonly struct Cache<T>(int maxItems, Func<DateTime> nowProvider) : ICac
     }
 
     public async Task<T> FetchAsync(string key, Func<Task<T>> valueFactory, TimeSpan timeToLive) {
-        if (EntryValue(key, out CacheEntry entry, out T entryValue)) return entryValue;
+        if (EntryValue(key, out CacheEntry entry)) return entry.Value;
 
         if (!await entry.Semaphore.WaitAsync(timeToLive)) return await valueFactory(); // per-key lock
         try {
@@ -56,7 +56,7 @@ public readonly struct Cache<T>(int maxItems, Func<DateTime> nowProvider) : ICac
         }
     }
     
-    private bool EntryValue(string key, out CacheEntry entry, out T entryValue) {
+    private bool EntryValue(string key, out CacheEntry entry) {
         long now = nowProvider().Ticks;
         lock (_cache) {
             if (!_cache.TryGetValue(key, out entry)) {
@@ -67,11 +67,9 @@ public readonly struct Cache<T>(int maxItems, Func<DateTime> nowProvider) : ICac
                     _cache.Remove(key); // remove and
                     _cache.Add(key, entry); // re-add key to end
                 }
-                entryValue = entry.Value;
                 return true;
             }
         }
-        entryValue = default;
         return false;
     }
 }
@@ -101,7 +99,7 @@ public readonly struct Cache2<T>(int maxItems, Func<DateTime> nowProvider) : ICa
     private readonly LinkedList<CacheEntry> _lru = new();
 
     public T Fetch(string key, Func<T> valueFactory, TimeSpan timeToLive) {
-        if (EntryValue(key, out CacheEntry entry, out T entryValue)) return entryValue;
+        if (EntryValue(key, out CacheEntry entry)) return entry.Value;
 
         entry.Semaphore.Wait(); // per-key lock
         try {
@@ -115,7 +113,7 @@ public readonly struct Cache2<T>(int maxItems, Func<DateTime> nowProvider) : ICa
     }
 
     public async Task<T> FetchAsync(string key, Func<Task<T>> valueFactory, TimeSpan timeToLive) {
-        if (EntryValue(key, out CacheEntry entry, out T entryValue)) return entryValue;
+        if (EntryValue(key, out CacheEntry entry)) return entry.Value;
 
         if (!await entry.Semaphore.WaitAsync(timeToLive)) return await valueFactory(); // per-key lock
         try {
@@ -128,7 +126,7 @@ public readonly struct Cache2<T>(int maxItems, Func<DateTime> nowProvider) : ICa
         }
     }
 
-    private bool EntryValue(string key, out CacheEntry entry, out T entryValue) {
+    private bool EntryValue(string key, out CacheEntry entry) {
         long now = nowProvider().Ticks;
         lock (_cache) {
             if (!_cache.TryGetValue(key, out var node)) {
@@ -146,12 +144,10 @@ public readonly struct Cache2<T>(int maxItems, Func<DateTime> nowProvider) : ICa
                         _lru.Remove(node); // move to front...
                         _lru.AddFirst(node); // ...of lru chain
                     }
-                    entryValue = entry.Value;
                     return true;
                 }
             }
         }
-        entryValue = default;
         return false;
     }
 }
@@ -206,7 +202,7 @@ public readonly struct Cache3<TKey, TValue>(int maxItems, Func<DateTime> nowProv
     private readonly LinkedList<CacheEntry> _lru = new();
 
     public TValue Fetch(TKey key, Func<TValue> valueFactory, TimeSpan timeToLive) {
-        if (EntryValue(key, out CacheEntry entry, out TValue entryValue)) return entryValue;
+        if (EntryValue(key, out CacheEntry entry)) return entry.Value;
 
         entry.Semaphore.Wait(); // per-key lock
         try {
@@ -220,7 +216,7 @@ public readonly struct Cache3<TKey, TValue>(int maxItems, Func<DateTime> nowProv
     }
 
     public async Task<TValue> FetchAsync(TKey key, Func<Task<TValue>> valueFactory, TimeSpan timeToLive) {
-        if (EntryValue(key, out CacheEntry entry, out TValue entryValue)) return entryValue;
+        if (EntryValue(key, out CacheEntry entry)) return entry.Value;
 
         if (!await entry.Semaphore.WaitAsync(timeToLive)) return await valueFactory(); // per-key lock
         try {
@@ -233,7 +229,7 @@ public readonly struct Cache3<TKey, TValue>(int maxItems, Func<DateTime> nowProv
         }
     }
 
-    private bool EntryValue(TKey key, out CacheEntry entry, out TValue entryValue) {
+    private bool EntryValue(TKey key, out CacheEntry entry) {
         long now = nowProvider().Ticks;
         lock (_cache) {
             if (!_cache.TryGetValue(key, out var node)) {
@@ -251,12 +247,10 @@ public readonly struct Cache3<TKey, TValue>(int maxItems, Func<DateTime> nowProv
                         _lru.Remove(node); // move to front...
                         _lru.AddFirst(node); // ...of lru chain
                     }
-                    entryValue = entry.Value;
                     return true;
                 }
             }
         }
-        entryValue = default;
         return false;
     }
 }
@@ -271,7 +265,7 @@ public sealed class CacheTests {
     [DataRow(3)]
     public void BasicSmokeTest(int version) {
         DateTime curTime = DateTime.MinValue;
-        ICache<int> c = new Cache0<int>(version, 5, () => curTime);
+        var c = new Cache0<int>(version, 5, () => curTime);
         
         int counter = 0;
         Func<int> factory = () => Interlocked.Increment(ref counter);
@@ -289,7 +283,7 @@ public sealed class CacheTests {
     [DataRow(3)]
     public async Task Async_BasicSmokeTest(int version) {
         DateTime curTime = DateTime.MinValue;
-        ICache<int> c = new Cache0<int>(version, 5, () => curTime);
+        var c = new Cache0<int>(version, 5, () => curTime);
         
         int counter = 0;
         Func<Task<int>> factory = () => Task.FromResult(Interlocked.Increment(ref counter));
@@ -306,7 +300,7 @@ public sealed class CacheTests {
     [DataRow(2)]
     [DataRow(3)]
     public void BasicLruTest(int version) {
-        ICache<int> c = new Cache0<int>(version, 3, () => DateTime.MinValue);
+        var c = new Cache0<int>(version, 3, () => DateTime.MinValue);
         // add a,b,c
         Assert.AreEqual(1, c.Fetch("a", () => 1, OneSecond));
         Assert.AreEqual(2, c.Fetch("b", () => 2, OneSecond));
@@ -326,7 +320,7 @@ public sealed class CacheTests {
     [DataRow(2)]
     [DataRow(3)]
     public async Task Async_BasicLruTest(int version) {
-        ICache<int> c = new Cache0<int>(version, 3, () => DateTime.MinValue);
+        var c = new Cache0<int>(version, 3, () => DateTime.MinValue);
         // add a,b,c
         Assert.AreEqual(1, await c.FetchAsync("a", () => Task.FromResult(1), OneSecond));
         Assert.AreEqual(2, await c.FetchAsync("b", () => Task.FromResult(2), OneSecond));
@@ -349,7 +343,7 @@ public sealed class CacheTests {
     [DataRow(2)]
     [DataRow(3)]
     public void Stampede_ConcurrentMissesInvokeFactoryOnce(int version) {
-        ICache<int> c = new Cache0<int>(version, 100, () => DateTime.MinValue);
+        var c = new Cache0<int>(version, 100, () => DateTime.MinValue);
         
         int factoryCalls = 0;
         Func<int> valueFactory = () => {
@@ -380,7 +374,7 @@ public sealed class CacheTests {
     [DataRow(2)]
     [DataRow(3)]
     public void Async_Stampede_ConcurrentMissesInvokeFactoryOnce(int version) {
-        ICache<int> c = new Cache0<int>(version, 100, () => DateTime.MinValue);
+        var c = new Cache0<int>(version, 100, () => DateTime.MinValue);
         
         int factoryCalls = 0;
         Func<Task<int>> valueFactory = async () => {
@@ -411,7 +405,7 @@ public sealed class CacheTests {
     [DataRow(3)]
     public void Stampede_ConcurrentExpiredRefreshInvokesFactoryOnce(int version) {
         DateTime curTime = DateTime.MinValue;
-        ICache<int> c = new Cache0<int>(version, 100, () => curTime);
+        var c = new Cache0<int>(version, 100, () => curTime);
 
         // Prime the cache with a short-lived value.
         c.Fetch("k", () => 1, OneSecond);
@@ -444,7 +438,7 @@ public sealed class CacheTests {
     [DataRow(3)]
     public async Task Async_Stampede_ConcurrentExpiredRefreshInvokesFactoryOnce(int version) {
         DateTime curTime = DateTime.MinValue;
-        ICache<int> c = new Cache0<int>(version, 100, () => curTime);
+        var c = new Cache0<int>(version, 100, () => curTime);
 
         await c.FetchAsync("k", () => Task.FromResult(1), OneSecond); // prime
         curTime += OneSecond; // force expiry
@@ -476,7 +470,7 @@ public sealed class CacheTests {
     [DataRow(3)]
     public void ThreadSafety_ConcurrentDistinctKeysAreConsistent(int version) {
         const int keys = 200, threadsPerKey = 8;
-        ICache<int> c = new Cache0<int>(version, keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
+        var c = new Cache0<int>(version, keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
 
         var perKeyCalls = new int[keys];
         using var ready = new ManualResetEventSlim(false);
@@ -511,7 +505,7 @@ public sealed class CacheTests {
     [DataRow(3)]
     public void Async_ThreadSafety_ConcurrentDistinctKeysAreConsistent(int version) {
         const int keys = 200, callersPerKey = 8;
-        ICache<int> c = new Cache0<int>(version, keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
+        var c = new Cache0<int>(version, keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
 
         var perKeyCalls = new int[keys];
         using var ready = new ManualResetEventSlim(false);
@@ -546,7 +540,7 @@ public sealed class CacheTests {
     [DataRow(2)]
     [DataRow(3)]
     public void ThreadSafety_EvictionUnderContentionDoesNotCorrupt(int version) {
-        ICache<int> c = new Cache0<int>(version, 10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
+        var c = new Cache0<int>(version, 10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
 
         int mismatches = 0, exceptions = 0;
         using var ready = new ManualResetEventSlim(false);
@@ -575,7 +569,7 @@ public sealed class CacheTests {
     [DataRow(2)]
     [DataRow(3)]
     public void Async_ThreadSafety_EvictionUnderContentionDoesNotCorrupt(int version) {
-        ICache<int> c = new Cache0<int>(version, 10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
+        var c = new Cache0<int>(version, 10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
 
         int mismatches = 0, exceptions = 0;
         using var ready = new ManualResetEventSlim(false);
