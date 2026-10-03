@@ -165,14 +165,21 @@ public readonly struct Cache0<T>(int version, int maxItems, Func<DateTime> nowPr
     private readonly ICache3<string, T> _cache3 = version switch {
         3 => new Cache3<string, T>(maxItems, nowProvider, EqualityComparer<string>.Default), _ => null
     };
+    private readonly ILruCache5<string, T> _lruCache = version switch {
+        4 => new LruCache6<string, T>(EqualityComparer<string>.Default, nowProvider, maxItems), _ => null
+    };
 
     public T Fetch(string key, Func<T> valueFactory, TimeSpan timeToLive) => _cache is not null
         ? _cache.Fetch(key, valueFactory, timeToLive)
-        : _cache3.Fetch(key, valueFactory, timeToLive);
+        : _cache3 is not null
+            ? _cache3.Fetch(key, valueFactory, timeToLive)
+            : _lruCache.Fetch(key, _ => valueFactory(), timeToLive);
 
     public async Task<T> FetchAsync(string key, Func<Task<T>> valueFactory, TimeSpan timeToLive) => _cache is not null
         ? await _cache.FetchAsync(key, valueFactory, timeToLive)
-        : await _cache3.FetchAsync(key, valueFactory, timeToLive);
+        : _cache3 is not null
+            ? await _cache3.FetchAsync(key, valueFactory, timeToLive)
+            : await _lruCache.FetchAsync(key, _ => valueFactory(), timeToLive);
 }
 
 /// <summary>
@@ -263,6 +270,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public void BasicSmokeTest(int version) {
         DateTime curTime = DateTime.MinValue;
         var c = new Cache0<int>(version, 5, () => curTime);
@@ -281,6 +289,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public async Task Async_BasicSmokeTest(int version) {
         DateTime curTime = DateTime.MinValue;
         var c = new Cache0<int>(version, 5, () => curTime);
@@ -299,6 +308,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public void BasicLruTest(int version) {
         var c = new Cache0<int>(version, 3, () => DateTime.MinValue);
         // add a,b,c
@@ -319,6 +329,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public async Task Async_BasicLruTest(int version) {
         var c = new Cache0<int>(version, 3, () => DateTime.MinValue);
         // add a,b,c
@@ -342,6 +353,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public void Stampede_ConcurrentMissesInvokeFactoryOnce(int version) {
         var c = new Cache0<int>(version, 100, () => DateTime.MinValue);
         
@@ -373,6 +385,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public void Async_Stampede_ConcurrentMissesInvokeFactoryOnce(int version) {
         var c = new Cache0<int>(version, 100, () => DateTime.MinValue);
         
@@ -403,6 +416,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public void Stampede_ConcurrentExpiredRefreshInvokesFactoryOnce(int version) {
         DateTime curTime = DateTime.MinValue;
         var c = new Cache0<int>(version, 100, () => curTime);
@@ -436,6 +450,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public async Task Async_Stampede_ConcurrentExpiredRefreshInvokesFactoryOnce(int version) {
         DateTime curTime = DateTime.MinValue;
         var c = new Cache0<int>(version, 100, () => curTime);
@@ -468,6 +483,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public void ThreadSafety_ConcurrentDistinctKeysAreConsistent(int version) {
         const int keys = 200, threadsPerKey = 8;
         var c = new Cache0<int>(version, keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
@@ -503,6 +519,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public void Async_ThreadSafety_ConcurrentDistinctKeysAreConsistent(int version) {
         const int keys = 200, callersPerKey = 8;
         var c = new Cache0<int>(version, keys + 1, () => DateTime.MinValue); // large enough to avoid eviction
@@ -539,6 +556,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public void ThreadSafety_EvictionUnderContentionDoesNotCorrupt(int version) {
         var c = new Cache0<int>(version, 10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
 
@@ -568,6 +586,7 @@ public sealed class CacheTests {
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(3)]
+    [DataRow(4)]
     public void Async_ThreadSafety_EvictionUnderContentionDoesNotCorrupt(int version) {
         var c = new Cache0<int>(version, 10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
 
