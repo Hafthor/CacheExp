@@ -301,6 +301,7 @@ public class LruCache5<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
     public void Evict(TKey key) {
         lock (_cache) {
             if (_cache.TryGetValue(key, out LinkedListNode<Entry> node)) {
+                node.Value.expiration = DateTime.MinValue;
                 _cache.Remove(key);
                 _lru.Remove(node);
             }
@@ -380,6 +381,7 @@ public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
     public void Evict(TKey key) {
         lock (_cache) {
             if (_cache.TryGetValue(key, out LinkedListNode<Entry> node)) {
+                node.Value.expiration = 0;
                 _cache.Remove(key);
                 _lru.Remove(node);
             }
