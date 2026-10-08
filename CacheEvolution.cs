@@ -6,6 +6,11 @@ public class WeatherService {
         // Simulate fetching weather data from a cache or an external service
         return $"Weather data for {location}: Sunny, 25°C";
     }
+    public static async Task<string> GetWeatherAsync(string location) {
+        await Task.Delay(250);
+        // Simulate fetching weather data from a cache or an external service
+        return $"Weather data for {location}: Sunny, 25°C";
+    }
 }
 public class NowService {
     public static DateTime Now() => DateTime.UtcNow;
@@ -235,6 +240,9 @@ public class CacheEvolution9 {
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
     }
+    public async Task<string> GetWeatherCachedAsync(string location) {
+        return await _cache.FetchAsync(location, WeatherService.GetWeatherAsync, TimeSpan.FromMinutes(5));
+    }
 }
 public interface ILruCache<TKey, TValue> {
     TValue Fetch(TKey key, Func<TKey, TValue> valueFactory, TimeSpan timeToLive);
@@ -323,6 +331,9 @@ public class CacheEvolution10 {
     private readonly LruCache6<string, string> _cache = new(StringComparer.OrdinalIgnoreCase, NowService.Now, 1000);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
+    }
+    public async Task<string> GetWeatherCachedAsync(string location) {
+        return await _cache.FetchAsync(location, WeatherService.GetWeatherAsync, TimeSpan.FromMinutes(5));
     }
 }
 public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ILruCache<TKey, TValue> {
