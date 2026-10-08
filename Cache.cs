@@ -165,7 +165,7 @@ public readonly struct Cache0<T>(int version, int maxItems, Func<DateTime> nowPr
     private readonly ICache3<string, T> _cache3 = version switch {
         3 => new Cache3<string, T>(maxItems, nowProvider, EqualityComparer<string>.Default), _ => null
     };
-    private readonly ILruCache5<string, T> _lruCache = version switch {
+    private readonly ILruCache<string, T> _lruCache = version switch {
         4 => new LruCache6<string, T>(EqualityComparer<string>.Default, nowProvider, maxItems), _ => null
     };
 
