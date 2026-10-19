@@ -7,7 +7,7 @@
 /// </summary>
 /// <remarks>
 /// Note that this is presently only optimized for the case when the semaphore is immediately acquirable.
-/// Invalid timeouts or an already cancelled CancellationToken will result in a ValueTask wrapped Task.
+/// Invalid timeouts or an already canceled CancellationToken will result in a ValueTask wrapped Task.
 /// 
 /// Under very high contention, when the semaphore is usually unavailable, this might be less efficient, but generally,
 /// under most circumstances, this will be more efficient than the standard SemaphoreSlim.WaitAsync methods, because
@@ -38,7 +38,7 @@ public static class SemaphoreSlimWaitValueAsyncExtensions {
         /// </summary>
         /// <param name="timeout">
         /// A <see cref="TimeSpan"/> that represents the amount of time
-        /// to wait, or a <see cref="TimeSpan.InfiniteTimeSpan"/> to wait indefinitely.
+        /// to wait, or a <see cref="Timeout.InfiniteTimeSpan"/> to wait indefinitely.
         /// </param>
         /// <returns>
         /// A task that will complete with a result of true if the current thread successfully entered
@@ -102,7 +102,7 @@ public static class SemaphoreSlimWaitValueAsyncExtensions {
         /// </summary>
         /// <param name="timeout">
         /// A <see cref="TimeSpan"/> that represents the amount of time
-        /// to wait, or a <see cref="TimeSpan.InfiniteTimeSpan"/> to wait indefinitely.
+        /// to wait, or a <see cref="Timeout.InfiniteTimeSpan"/> to wait indefinitely.
         /// </param>
         /// <param name="cancellationToken">
         /// The <see cref="CancellationToken"/> token to observe.
