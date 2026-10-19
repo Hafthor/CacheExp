@@ -1,4 +1,6 @@
-﻿namespace CacheExp;
+﻿using System.Diagnostics;
+
+namespace CacheExp;
 
 public static partial class WeatherService {
     public static string GetWeather(string location) {
@@ -328,17 +330,24 @@ public class LruCache5<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
 
 // Step 10 - turns out, there's a very subtle race condition in the code above. On some processors, in particular ARM, memory reference reordering
 // can cause the value to be returned before the expiration time is set, which can cause the value to be recomputed unnecessarily.
-// Also, we should only wait for the semaphore for the timeToLive, and if it times out, we should call the valueFactory again.
+// Also, we should only wait for the semaphore for the timeToLive, and if it times out, we should call the valueFactory again. Also, we should use
+// ValueTask<T> rather than Task<T> for the async method, so that we don't allocate a Task object when the value is already cached.
+public interface ILruCache10<TKey, TValue> {
+    TValue Fetch(TKey key, Func<TKey, TValue> valueFactory, TimeSpan timeToLive);
+    ValueTask<TValue> FetchAsync(TKey key, Func<TKey, Task<TValue>> valueFactory, TimeSpan timeToLive);
+    void Evict(TKey key);
+    void Clear();
+}
 public class CacheEvolution10 {
     private readonly LruCache6<string, string> _cache = new(StringComparer.OrdinalIgnoreCase, NowService.UtcNow, 1000);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
     }
-    public async Task<string> GetWeatherCachedAsync(string location) {
+    public async ValueTask<string> GetWeatherCachedAsync(string location) {
         return await _cache.FetchAsync(location, WeatherService.GetWeatherAsync, TimeSpan.FromMinutes(5));
     }
 }
-public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ILruCache<TKey, TValue> {
+public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ILruCache10<TKey, TValue> {
     class Entry(TKey key) {
         public readonly TKey key = key;
         public TValue value;
@@ -378,9 +387,9 @@ public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
         }
     }
 
-    public async Task<TValue> FetchAsync(TKey key, Func<TKey, Task<TValue>> valueFactory, TimeSpan timeToLive) {
+    public async ValueTask<TValue> FetchAsync(TKey key, Func<TKey, Task<TValue>> valueFactory, TimeSpan timeToLive) {
         if (EntryValue(key, out Entry entry)) return entry.value;
-        if (!await entry.semaphore.WaitAsync(timeToLive)) return await valueFactory(key);
+        if (!await entry.semaphore.WaitValueAsync(timeToLive)) return await valueFactory(key);
         try {
             if (Volatile.Read(ref entry.expiration) > nowProvider().Ticks) return entry.value; // check again in case another thread has already updated the value
             TValue val = entry.value = await valueFactory(key);
@@ -406,5 +415,151 @@ public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
             _cache.Clear();
             _lru.Clear();
         }
+    }
+}
+
+/// <summary>
+/// ValueTask returning extension methods for SemaphoreSlim's .WaitAsync methods.
+/// Returns a Task-free ValueTask when the semaphore is immediately acquirable, otherwise returns a ValueTask wrapping
+/// the Task returned by SemaphoreSlim.WaitAsync.
+/// Note that this is presently only optimized for the case when the semaphore is immediately acquirable.
+/// Invalid timeouts or an already cancelled CancellationToken will result in a ValueTask wrapped Task.
+/// </summary>
+/// <remarks>
+/// Under high contention, when the semaphore is usually unavailable, this might be less efficient, but generally,
+/// under most circumstances, this will be more efficient than the standard SemaphoreSlim.WaitAsync methods, because
+/// it avoids allocating a Task object when the semaphore is available.
+/// 
+/// A future improvement could be to synchronously handle the already cancelled CancellationToken case, and the
+/// invalid timeout cases. It would be important to match the behavior of the standard SemaphoreSlim.WaitAsync methods.
+/// </remarks>
+public static class SemaphoreSlimWaitValueAsync {
+    private static readonly TimeSpan TimeoutLimit = TimeSpan.FromMilliseconds(int.MaxValue + 1L); // must be less than this
+
+    extension(SemaphoreSlim semaphore) {
+        /// <summary>
+        /// Asynchronously waits to enter the <see cref="SemaphoreSlim"/>.
+        /// </summary>
+        /// <returns>A task that will complete when the semaphore has been entered.</returns>
+        public ValueTask WaitValueAsync() =>
+            semaphore.Wait(0) // try to acquire the semaphore synchronously
+                ? ValueTask.CompletedTask
+                : new ValueTask(semaphore.WaitAsync());
+
+        /// <summary>
+        /// Asynchronously waits to enter the <see cref="SemaphoreSlim"/>, using a <see
+        /// cref="TimeSpan"/> to measure the time interval, while observing a
+        /// <see cref="CancellationToken"/>.
+        /// </summary>
+        /// <param name="timeout">
+        /// A <see cref="TimeSpan"/> that represents the number of milliseconds
+        /// to wait, or a <see cref="TimeSpan"/> that represents -1 milliseconds to wait indefinitely.
+        /// </param>
+        /// <returns>
+        /// A task that will complete with a result of true if the current thread successfully entered
+        /// the <see cref="SemaphoreSlim"/>, otherwise with a result of false.
+        /// </returns>
+        /// <exception cref="ObjectDisposedException">
+        /// The current instance has already been disposed.
+        /// </exception>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="timeout"/> is a negative number other than -1 milliseconds, which represents
+        /// an infinite time-out -or- timeout is greater than <see cref="int.MaxValue"/>.
+        /// </exception>
+        public ValueTask<bool> WaitValueAsync(TimeSpan timeout) =>
+            (timeout == Timeout.InfiniteTimeSpan || timeout >= TimeSpan.Zero && timeout < TimeoutLimit) &&
+            semaphore.Wait(0)
+                ? ValueTask.FromResult(true)
+                : new ValueTask<bool>(semaphore.WaitAsync(timeout));
+
+        /// <summary>
+        /// Asynchronously waits to enter the <see cref="SemaphoreSlim"/>,
+        /// using a 32-bit signed integer to measure the time interval.
+        /// </summary>
+        /// <param name="millisecondsTimeout">
+        /// The number of milliseconds to wait, or <see cref="Timeout.Infinite"/>(-1) to wait indefinitely.
+        /// </param>
+        /// <returns>
+        /// A task that will complete with a result of true if the current thread successfully entered
+        /// the <see cref="SemaphoreSlim"/>, otherwise with a result of false.
+        /// </returns>
+        /// <exception cref="ObjectDisposedException">The current instance has already been
+        /// disposed.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="millisecondsTimeout"/> is a negative number other than -1,
+        /// which represents an infinite time-out.
+        /// </exception>
+        public ValueTask<bool> WaitValueAsync(int timeoutMilliseconds) =>
+            timeoutMilliseconds >= -1 && // -1 is the value for Timeout.Infinite, which is valid.
+            semaphore.Wait(0)
+                ? ValueTask.FromResult(true)
+                : new ValueTask<bool>(semaphore.WaitAsync(timeoutMilliseconds));
+
+        /// <summary>
+        /// Asynchronously waits to enter the <see cref="SemaphoreSlim"/>, while observing a
+        /// <see cref="CancellationToken"/>.
+        /// </summary>
+        /// <returns>A task that will complete when the semaphore has been entered.</returns>
+        /// <param name="cancellationToken">
+        /// The <see cref="CancellationToken"/> token to observe.
+        /// </param>
+        /// <exception cref="ObjectDisposedException">
+        /// The current instance has already been disposed.
+        /// </exception>
+        public ValueTask WaitValueAsync(CancellationToken ct) =>
+            !ct.IsCancellationRequested &&
+            semaphore.Wait(0)
+                ? ValueTask.CompletedTask
+                : new ValueTask(semaphore.WaitAsync(ct));
+
+        /// <summary>
+        /// Asynchronously waits to enter the <see cref="SemaphoreSlim"/>, using a <see
+        /// cref="TimeSpan"/> to measure the time interval.
+        /// </summary>
+        /// <param name="timeout">
+        /// A <see cref="TimeSpan"/> that represents the number of milliseconds
+        /// to wait, or a <see cref="TimeSpan"/> that represents -1 milliseconds to wait indefinitely.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The <see cref="CancellationToken"/> token to observe.
+        /// </param>
+        /// <returns>
+        /// A task that will complete with a result of true if the current thread successfully entered
+        /// the <see cref="SemaphoreSlim"/>, otherwise with a result of false.
+        /// </returns>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="timeout"/> is a negative number other than -1 milliseconds, which represents
+        /// an infinite time-out -or- timeout is greater than <see cref="int.MaxValue"/>.
+        /// </exception>
+        public ValueTask<bool> WaitValueAsync(TimeSpan timeout, CancellationToken ct) =>
+            !ct.IsCancellationRequested &&
+            (timeout == Timeout.InfiniteTimeSpan || timeout >= TimeSpan.Zero && timeout < TimeoutLimit) &&
+            semaphore.Wait(0)
+                ? ValueTask.FromResult(true)
+                : new ValueTask<bool>(semaphore.WaitAsync(timeout, ct));
+
+        /// <summary>
+        /// Asynchronously waits to enter the <see cref="SemaphoreSlim"/>,
+        /// using a 32-bit signed integer to measure the time interval,
+        /// while observing a <see cref="CancellationToken"/>.
+        /// </summary>
+        /// <param name="millisecondsTimeout">
+        /// The number of milliseconds to wait, or <see cref="Timeout.Infinite"/>(-1) to wait indefinitely.
+        /// </param>
+        /// <param name="cancellationToken">The <see cref="CancellationToken"/> to observe.</param>
+        /// <returns>
+        /// A task that will complete with a result of true if the current thread successfully entered
+        /// the <see cref="SemaphoreSlim"/>, otherwise with a result of false.
+        /// </returns>
+        /// <exception cref="ObjectDisposedException">The current instance has already been
+        /// disposed.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="millisecondsTimeout"/> is a negative number other than -1,
+        /// which represents an infinite time-out.
+        /// </exception>
+        public ValueTask<bool> WaitValueAsync(int timeoutMilliseconds, CancellationToken ct) =>
+            !ct.IsCancellationRequested &&
+            timeoutMilliseconds >= -1 && // -1 is the value for Timeout.Infinite, which is valid.
+            semaphore.Wait(0)
+                ? ValueTask.FromResult(true)
+                : new ValueTask<bool>(semaphore.WaitAsync(timeoutMilliseconds, ct));
     }
 }
