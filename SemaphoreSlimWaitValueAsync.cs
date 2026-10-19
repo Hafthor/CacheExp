@@ -14,7 +14,7 @@
 /// it avoids allocating a Task object when the semaphore is available.
 /// 
 /// Potential future improvements:
-/// * Synchronously handle the already cancelled CancellationToken case.
+/// * Synchronously handle the already canceled CancellationToken case.
 /// * Synchronously handle the invalid timeout value cases.
 /// It would be important to match the exact behavior of the standard SemaphoreSlim.WaitAsync methods.
 /// </remarks>
@@ -73,11 +73,11 @@ public static class SemaphoreSlimWaitValueAsyncExtensions {
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="millisecondsTimeout"/> is a negative number other than -1,
         /// which represents an infinite time-out.
         /// </exception>
-        public ValueTask<bool> WaitValueAsync(int timeoutMilliseconds) =>
-            timeoutMilliseconds >= -1 && // -1 is the value for Timeout.Infinite, which is valid.
+        public ValueTask<bool> WaitValueAsync(int millisecondsTimeout) =>
+            millisecondsTimeout >= -1 && // -1 is the value for Timeout.Infinite, which is valid.
             semaphore.Wait(0)
                 ? ValueTask.FromResult(true)
-                : new ValueTask<bool>(semaphore.WaitAsync(timeoutMilliseconds));
+                : new ValueTask<bool>(semaphore.WaitAsync(millisecondsTimeout));
 
         /// <summary>
         /// Asynchronously waits to enter the <see cref="SemaphoreSlim"/>, while observing a
@@ -90,11 +90,11 @@ public static class SemaphoreSlimWaitValueAsyncExtensions {
         /// <exception cref="ObjectDisposedException">
         /// The current instance has already been disposed.
         /// </exception>
-        public ValueTask WaitValueAsync(CancellationToken ct) =>
-            !ct.IsCancellationRequested &&
+        public ValueTask WaitValueAsync(CancellationToken cancellationToken) =>
+            !cancellationToken.IsCancellationRequested &&
             semaphore.Wait(0)
                 ? ValueTask.CompletedTask
-                : new ValueTask(semaphore.WaitAsync(ct));
+                : new ValueTask(semaphore.WaitAsync(cancellationToken));
 
         /// <summary>
         /// Asynchronously waits to enter the <see cref="SemaphoreSlim"/>, using a <see
@@ -115,12 +115,12 @@ public static class SemaphoreSlimWaitValueAsyncExtensions {
         /// <paramref name="timeout"/> is a negative TimeSpan other than -1 milliseconds, which represents
         /// an infinite time-out -or- timeout is greater than or equal to <see cref="int.MaxValue"/>+1.
         /// </exception>
-        public ValueTask<bool> WaitValueAsync(TimeSpan timeout, CancellationToken ct) =>
-            !ct.IsCancellationRequested &&
+        public ValueTask<bool> WaitValueAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
+            !cancellationToken.IsCancellationRequested &&
             (timeout == Timeout.InfiniteTimeSpan || timeout >= TimeSpan.Zero && timeout < TimeoutLimit) &&
             semaphore.Wait(0)
                 ? ValueTask.FromResult(true)
-                : new ValueTask<bool>(semaphore.WaitAsync(timeout, ct));
+                : new ValueTask<bool>(semaphore.WaitAsync(timeout, cancellationToken));
 
         /// <summary>
         /// Asynchronously waits to enter the <see cref="SemaphoreSlim"/>,
@@ -140,11 +140,11 @@ public static class SemaphoreSlimWaitValueAsyncExtensions {
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="millisecondsTimeout"/> is a negative number other than -1,
         /// which represents an infinite time-out.
         /// </exception>
-        public ValueTask<bool> WaitValueAsync(int timeoutMilliseconds, CancellationToken ct) =>
-            !ct.IsCancellationRequested &&
-            timeoutMilliseconds >= -1 && // -1 is the value for Timeout.Infinite, which is valid.
+        public ValueTask<bool> WaitValueAsync(int millisecondsTimeout, CancellationToken cancellationToken) =>
+            !cancellationToken.IsCancellationRequested &&
+            millisecondsTimeout >= -1 && // -1 is the value for Timeout.Infinite, which is valid.
             semaphore.Wait(0)
                 ? ValueTask.FromResult(true)
-                : new ValueTask<bool>(semaphore.WaitAsync(timeoutMilliseconds, ct));
+                : new ValueTask<bool>(semaphore.WaitAsync(millisecondsTimeout, cancellationToken));
     }
 }
