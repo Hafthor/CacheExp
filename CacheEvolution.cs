@@ -330,24 +330,16 @@ public class LruCache5<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
 
 // Step 10 - turns out, there's a very subtle race condition in the code above. On some processors, in particular ARM, memory reference reordering
 // can cause the value to be returned before the expiration time is set, which can cause the value to be recomputed unnecessarily.
-// Also, we should only wait for the semaphore for the timeToLive, and if it times out, we should call the valueFactory again. Also, we should use
-// ValueTask<T> rather than Task<T> for the async method, so that we don't allocate a Task object when the value is already cached.
-public interface ILruCache10<TKey, TValue> {
-    TValue Fetch(TKey key, Func<TKey, TValue> valueFactory, TimeSpan timeToLive);
-    ValueTask<TValue> FetchAsync(TKey key, Func<TKey, Task<TValue>> valueFactory, TimeSpan timeToLive);
-    void Evict(TKey key);
-    void Clear();
-}
 public class CacheEvolution10 {
     private readonly LruCache6<string, string> _cache = new(StringComparer.OrdinalIgnoreCase, NowService.UtcNow, 1000);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
     }
-    public async ValueTask<string> GetWeatherCachedAsync(string location) {
+    public async Task<string> GetWeatherCachedAsync(string location) {
         return await _cache.FetchAsync(location, WeatherService.GetWeatherAsync, TimeSpan.FromMinutes(5));
     }
 }
-public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ILruCache10<TKey, TValue> {
+public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ILruCache<TKey, TValue> {
     class Entry(TKey key) {
         public readonly TKey key = key;
         public TValue value;
@@ -387,9 +379,9 @@ public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
         }
     }
 
-    public async ValueTask<TValue> FetchAsync(TKey key, Func<TKey, Task<TValue>> valueFactory, TimeSpan timeToLive) {
+    public async Task<TValue> FetchAsync(TKey key, Func<TKey, Task<TValue>> valueFactory, TimeSpan timeToLive) {
         if (EntryValue(key, out Entry entry)) return entry.value;
-        if (!await entry.semaphore.WaitValueAsync(timeToLive)) return await valueFactory(key);
+        if (!await entry.semaphore.WaitAsync(timeToLive)) return await valueFactory(key);
         try {
             if (Volatile.Read(ref entry.expiration) > nowProvider().Ticks) return entry.value; // check again in case another thread has already updated the value
             TValue val = entry.value = await valueFactory(key);
