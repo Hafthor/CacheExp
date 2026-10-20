@@ -389,7 +389,7 @@ public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
 
     public async ValueTask<TValue> FetchAsync(TKey key, Func<TKey, Task<TValue>> valueFactory, TimeSpan timeToLive) {
         if (EntryValue(key, out Entry entry)) return entry.value;
-        if (!await entry.semaphore.WaitValueAsync(timeToLive)) return await valueFactory(key);
+        if (!await entry.semaphore.WaitAsync(timeToLive)) return await valueFactory(key);
         try {
             if (Volatile.Read(ref entry.expiration) > nowProvider().Ticks) return entry.value; // check again in case another thread has already updated the value
             TValue val = entry.value = await valueFactory(key);
