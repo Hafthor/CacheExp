@@ -19,7 +19,7 @@ public interface ICache<T> {
 /// ARM-based Apple Silicon, where this was built.
 /// <see href="https://github.com/tpn/pdfs/blob/master/Memory%20Barriers%20-%20a%20Hardware%20View%20for%20Software%20Hackers%20(July%2023%2C%202010).pdf"/>
 /// </remarks>
-public readonly struct Cache<T>(int maxItems, Func<DateTime> nowProvider) : ICache<T> {
+public readonly struct CacheTests<T>(int maxItems, Func<DateTime> nowProvider) : ICache<T> {
     private class CacheEntry {
         public T Value;
         public long Expires; // ticks
@@ -159,7 +159,7 @@ public interface ICache3<in TKey, TValue> {
 
 public readonly struct Cache0<T>(int version, int maxItems, Func<DateTime> nowProvider) : ICache<T> {
     private readonly ICache<T> _cache = version switch {
-        1 => new Cache<T>(maxItems, nowProvider), 2 => new Cache2<T>(maxItems, nowProvider), _ => null
+        1 => new CacheTests<T>(maxItems, nowProvider), 2 => new Cache2<T>(maxItems, nowProvider), _ => null
     };
 
     private readonly ICache3<string, T> _cache3 = version switch {

@@ -1,7 +1,4 @@
-﻿using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
-
-namespace CacheExp;
+﻿namespace CacheExp;
 
 public static partial class WeatherService {
     public static string GetWeather(string location) {
@@ -10,14 +7,19 @@ public static partial class WeatherService {
         return $"Weather data for {location}: Sunny, 25°C";
     }
 }
+
 public static class NowService {
     public static DateTime UtcNow() => DateTime.UtcNow;
+}
+
+public interface ICachedWeather {
+    string GetWeatherCached(string location);
 }
 
 // Step 1: Here's where we start, we have a method called GetWeather that simulates fetching weather data for a given location.
 // The method sleeps for 250 milliseconds to simulate a delay in fetching the data, and then returns a string with the weather
 // information. We need to implement caching to speed things up and to save on costs.
-public class CacheEvolution1 {
+public class CacheEvolution1 : ICachedWeather {
     public string GetWeatherCached(string location) {
         // do something to cache the weather data for the location
         return WeatherService.GetWeather(location);
@@ -26,7 +28,7 @@ public class CacheEvolution1 {
 
 // Step 2 - let's just do the simplest thing that could possibly work. We'll add a dictionary to store the cached weather data.
 // We're smart, so we know that the weather in "LONDON" is the same as "london", so we'll use a case-insensitive comparer for the dictionary keys.
-public class CacheEvolution2 {
+public class CacheEvolution2 : ICachedWeather {
     private readonly Dictionary<string, string> _cache = new(StringComparer.OrdinalIgnoreCase);
     public string GetWeatherCached(string location) {
         return _cache.GetValueOrDefault(location) ?? (_cache[location] = WeatherService.GetWeather(location));
@@ -35,7 +37,7 @@ public class CacheEvolution2 {
 
 // Step 3 - but we should build a cache class that can be reused for other things, so let's build a simple cache class that
 // uses generic types for the key and value, and allows us to specify a key comparer. And we should build it to an interface.
-public class CacheEvolution3 {
+public class CacheEvolution3 : ICachedWeather {
     private readonly SimpleCache<string, string> _cache = new(StringComparer.OrdinalIgnoreCase);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather);
@@ -56,7 +58,7 @@ public class SimpleCache<TKey, TValue>(IEqualityComparer<TKey> comparer) : ISimp
 }
 
 // Step 4 - items in the cache should expire after a certain amount of time, so let's add an expiration time to the cache class.
-public class CacheEvolution4 {
+public class CacheEvolution4 : ICachedWeather {
     private readonly CacheWithExpiration<string, string> _cache = new(StringComparer.OrdinalIgnoreCase, NowService.UtcNow);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
@@ -83,7 +85,7 @@ public class CacheWithExpiration<TKey, TValue>(IEqualityComparer<TKey> comparer,
 
 // Step 5 - we need to be able to limit the number of items in the cache, so let's add a maximum size. When the cache becomes full, we'll evict the
 // least recently used item from the cache.
-public class CacheEvolution5 {
+public class CacheEvolution5 : ICachedWeather {
     private readonly LruCache<string, string> _cache = new(StringComparer.OrdinalIgnoreCase, NowService.UtcNow, 1000);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
@@ -114,7 +116,7 @@ public class LruCache<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateT
 // Step 6 - we see that the cache has bad performance when promoting items and evicting items. This is because we are using an OrderedDictionary
 // which is implemented as a dictionary and a list. The list has O(n) performance for removing items, so instead, we should use a dictionary and
 // a linked list which will have O(1) performance for removing items.
-public class CacheEvolution6 {
+public class CacheEvolution6 : ICachedWeather {
     private readonly LruCache2<string, string> _cache = new(StringComparer.OrdinalIgnoreCase, NowService.UtcNow, 1000);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
@@ -151,7 +153,7 @@ public class LruCache2<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
 
 // Step 7 - our implementation is not thread safe. We could just lock wrap the entire method, but that would be terribly inefficient. Instead,
 // we should only lock wrap the code that modifies the dictionary and linked list, but not the call to the value factory.
-public class CacheEvolution7 {
+public class CacheEvolution7 : ICachedWeather {
     private readonly LruCache3<string, string> _cache = new(StringComparer.OrdinalIgnoreCase, NowService.UtcNow, 1000);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
@@ -192,7 +194,7 @@ public class LruCache3<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
 // Step 8 - this is good, but we have a problem when multiple threads are trying to fetch the same key at the same time.
 // They will all call the value factory, which is not what we want. We want only one thread to call the value factory,
 // and the other threads to wait for the result. We can do this by using a per-key lock before calling the valueFactory.
-public class CacheEvolution8 {
+public class CacheEvolution8 : ICachedWeather {
     private readonly LruCache4<string, string> _cache = new(StringComparer.OrdinalIgnoreCase, NowService.UtcNow, 1000);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
@@ -240,7 +242,12 @@ public static partial class WeatherService {
         return $"Weather data for {location}: Sunny, 25°C";
     }
 }
-public class CacheEvolution9 {
+
+public interface ICachedWeatherAsync : ICachedWeather {
+    Task<string> GetWeatherCachedAsync(string location);
+}
+
+public class CacheEvolution9 : ICachedWeatherAsync {
     private readonly LruCache5<string, string> _cache = new(StringComparer.OrdinalIgnoreCase, NowService.UtcNow, 1000);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
@@ -339,7 +346,12 @@ public interface ILruCache10<TKey, TValue> {
     void Evict(TKey key);
     void Clear();
 }
-public class CacheEvolution10 {
+
+public interface ICachedWeatherValueAsync : ICachedWeather {
+    ValueTask<string> GetWeatherCachedAsync(string location);
+}
+
+public class CacheEvolution10 : ICachedWeatherValueAsync {
     private readonly LruCache6<string, string> _cache = new(StringComparer.OrdinalIgnoreCase, NowService.UtcNow, 1000);
     public string GetWeatherCached(string location) {
         return _cache.Fetch(location, WeatherService.GetWeather, TimeSpan.FromMinutes(5));
