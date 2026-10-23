@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 
 namespace CacheExp;
 
@@ -330,7 +331,7 @@ public class LruCache5<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
 
 // Step 10 - turns out, there's a very subtle race condition in the code above. On some processors, in particular ARM, memory reference reordering
 // can cause the value to be returned before the expiration time is set, which can cause the value to be recomputed unnecessarily.
-// Also, we should only wait for the semaphore for the timeToLive, and if it times out, we should call the valueFactory again. Also, we should use
+// Also, we should only wait for the semaphore for the timeToLive, and if it times out, we should throw an exception. Also, we should use
 // ValueTask<T> rather than Task<T> for the async method, so that we don't allocate a Task object when the value is already cached.
 public interface ILruCache10<TKey, TValue> {
     TValue Fetch(TKey key, Func<TKey, TValue> valueFactory, TimeSpan timeToLive);
@@ -374,30 +375,46 @@ public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
             return Volatile.Read(ref entry.expiration) > nowProvider().Ticks;
         }
     }
+
     public TValue Fetch(TKey key, Func<TKey, TValue> valueFactory, TimeSpan timeToLive) {
         if (EntryValue(key, out Entry entry)) return entry.value;
-        if (!entry.semaphore.Wait(timeToLive)) return valueFactory(key);
+        if (!entry.semaphore.Wait(timeToLive)) throw new TimeoutException("Timeout waiting for value to be set for key.");
         try {
             if (Volatile.Read(ref entry.expiration) > nowProvider().Ticks) return entry.value; // check again in case another thread has already updated the value
-            TValue val = entry.value = valueFactory(key);
+            TValue val = entry.value = ExecuteWithTimeout(key, valueFactory, timeToLive);
             Volatile.Write(ref entry.expiration, (nowProvider() + timeToLive).Ticks);
             return val;
         } finally {
             entry.semaphore.Release();
         }
     }
+    private TValue ExecuteWithTimeout(TKey key, Func<TKey, TValue> valueFactory, TimeSpan timeToLive) {
+        using CancellationTokenSource cts = new(timeToLive);
+        Task<TValue> task = Task.Run(() => valueFactory(key), cts.Token);
+        try {
+            task.Wait(cts.Token);
+        } catch (OperationCanceledException) {
+            throw new TimeoutException($"Timeout waiting for {nameof(valueFactory)} to return.");
+        }
+        return task.Result;
+    }
 
     public async ValueTask<TValue> FetchAsync(TKey key, Func<TKey, Task<TValue>> valueFactory, TimeSpan timeToLive) {
         if (EntryValue(key, out Entry entry)) return entry.value;
-        if (!await entry.semaphore.WaitAsync(timeToLive)) return await valueFactory(key);
+        if (!await entry.semaphore.WaitAsync(timeToLive)) throw new TimeoutException("Timeout waiting for value to be set for key.");
         try {
             if (Volatile.Read(ref entry.expiration) > nowProvider().Ticks) return entry.value; // check again in case another thread has already updated the value
-            TValue val = entry.value = await valueFactory(key);
+            TValue val = entry.value = await ExecuteWithTimeoutAsync(key, valueFactory, timeToLive);
             Volatile.Write(ref entry.expiration, (nowProvider() + timeToLive).Ticks);
             return val;
         } finally {
             entry.semaphore.Release();
         }
+    }
+    private async Task<TValue> ExecuteWithTimeoutAsync(TKey key, Func<TKey, Task<TValue>> valueFactory, TimeSpan timeToLive) {
+        Task<TValue> task = valueFactory(key);
+        if (await Task.WhenAny(task, Task.Delay(timeToLive)) == task) return await task; // task completed within timeout
+        throw new TimeoutException($"Timeout waiting for {nameof(valueFactory)} to return.");
     }
 
     public void Evict(TKey key) {

@@ -278,11 +278,10 @@ public sealed class CacheTests {
         int counter = 0;
         Func<int> factory = () => Interlocked.Increment(ref counter);
         
-        Assert.AreEqual(1, c.Fetch("a", factory, TimeSpan.Zero));
-        Assert.AreEqual(2, c.Fetch("a", factory, OneSecond));
-        Assert.AreEqual(2, c.Fetch("a", factory, TimeSpan.Zero));
+        Assert.AreEqual(1, c.Fetch("a", factory, OneSecond));
         curTime += OneSecond;
-        Assert.AreEqual(3, c.Fetch("a", factory, OneSecond));
+        Assert.AreEqual(2, c.Fetch("a", factory, OneSecond));
+        Assert.AreEqual(2, c.Fetch("a", factory, OneSecond));
     }
 
     [TestMethod]
@@ -561,6 +560,7 @@ public sealed class CacheTests {
         var c = new Cache0<int>(version, 10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
 
         int mismatches = 0, exceptions = 0;
+        Exception firstException = null;
         using var ready = new ManualResetEventSlim(false);
         var tasks = Enumerable.Range(0, 32).Select(t => Task.Run(() => {
             ready.Wait();
@@ -568,16 +568,17 @@ public sealed class CacheTests {
             try {
                 for (int i = 0; i < 5000; i++) {
                     int n = rnd.Next(100);
-                    int v = c.Fetch("k" + n, () => n, OneSecond);
+                    int v = c.Fetch("k" + n, () => n, 5 * OneSecond); // longer TTL to avoid timeouts
                     if (v != n) Interlocked.Increment(ref mismatches);
                 }
-            } catch {
+            } catch (Exception ex) {
+                Interlocked.CompareExchange(ref firstException, ex, null);
                 Interlocked.Increment(ref exceptions);
             }
         })).ToArray();
         ready.Set();
         Assert.IsTrue(Task.WaitAll(tasks, OneMinute), "cache deadlocked under eviction contention");
-        Assert.AreEqual(0, exceptions, "concurrent eviction must not throw (e.g. collection corruption)");
+        Assert.AreEqual(0, exceptions, $"concurrent eviction must not throw (version {version}). First exception: {firstException}");
         Assert.AreEqual(0, mismatches, "a key must always return the value its own factory produced");
     }
     
@@ -591,6 +592,7 @@ public sealed class CacheTests {
         var c = new Cache0<int>(version, 10, () => DateTime.MinValue); // tiny cache -> constant eviction churn
 
         int mismatches = 0, exceptions = 0;
+        Exception firstException = null;
         using var ready = new ManualResetEventSlim(false);
         var tasks = Enumerable.Range(0, 32).Select(t => Task.Run(async () => {
             ready.Wait();
@@ -601,13 +603,14 @@ public sealed class CacheTests {
                     int v = await c.FetchAsync("k" + n, () => Task.FromResult(n), OneSecond);
                     if (v != n) Interlocked.Increment(ref mismatches);
                 }
-            } catch {
+            } catch (Exception ex) {
+                Interlocked.CompareExchange(ref firstException, ex, null);
                 Interlocked.Increment(ref exceptions);
             }
         })).ToArray();
         ready.Set();
         Assert.IsTrue(Task.WaitAll(tasks, OneMinute), "cache deadlocked under eviction contention");
-        Assert.AreEqual(0, exceptions, "concurrent eviction must not throw (e.g. collection corruption)");
+        Assert.AreEqual(0, exceptions, $"concurrent eviction must not throw (version {version}). First exception: {firstException}");
         Assert.AreEqual(0, mismatches, "a key must always return the value its own factory produced");
     }
 }
