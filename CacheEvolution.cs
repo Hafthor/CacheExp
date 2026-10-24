@@ -68,18 +68,13 @@ public interface ICacheWithExpiration<TKey, TValue> {
     TValue Fetch(TKey key, Func<TKey, TValue> valueFactory, TimeSpan timeToLive);
 }
 public class CacheWithExpiration<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider) : ICacheWithExpiration<TKey, TValue> {
-    class Entry {
-        public TValue value;
-        public DateTime expiration; // note we store the expiration time rather than we it was created. This makes it cheaper to check if the entry is expired.
-    }
+    private readonly record struct Entry(TValue Value, DateTime Expiration); // note we store the expiration time rather than when it was created. This makes it cheaper to check if the entry is expired.
     private readonly Dictionary<TKey, Entry> _cache = new(comparer);
     public TValue Fetch(TKey key, Func<TKey, TValue> valueFactory, TimeSpan timeToLive) {
-        if (!_cache.TryGetValue(key, out var entry)) _cache[key] = entry = new Entry();
-        if (entry.expiration <= nowProvider()) { // a new entry will have a default expiration of DateTime.MinValue, so it will always be expired.
-            entry.value = valueFactory(key);
-            entry.expiration = nowProvider() + timeToLive;
-        }
-        return entry.value;
+        if (!_cache.TryGetValue(key, out Entry entry)) _cache[key] = entry = default;
+        if (entry.Expiration <= nowProvider()) // a new entry will have a default expiration of DateTime.MinValue, so it will always be expired.
+            _cache[key] = entry = new Entry(valueFactory(key), nowProvider() + timeToLive);
+        return entry.Value;
     }
 }
 
@@ -92,24 +87,15 @@ public class CacheEvolution5 : ICachedWeather {
     }
 }
 public class LruCache<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ICacheWithExpiration<TKey, TValue> {
-    class Entry {
-        public TValue value;
-        public DateTime expiration;
-    }
+    private readonly record struct Entry(TValue Value, DateTime Expiration);
     private readonly OrderedDictionary<TKey, Entry> _cache = new(comparer);
     public TValue Fetch(TKey key, Func<TKey, TValue> valueFactory, TimeSpan timeToLive) {
-        if (!_cache.TryGetValue(key, out var entry)) {
-            _cache[key] = entry = new Entry(); // new entry is added to the end of the list
-            if (_cache.Count > maxSize) _cache.RemoveAt(0); // remove the least recently used item
-        } else {
-            _cache.Remove(key); // remove the item from the cache so we can add it back to the end of the list
-            _cache[key] = entry;
-        }
-        if (entry.expiration <= nowProvider()) {
-            entry.value = valueFactory(key);
-            entry.expiration = nowProvider() + timeToLive;
-        }
-        return entry.value;
+        _cache.Remove(key, out Entry entry); // remove the item from the cache so we can add it back to the end of the list
+        _cache[key] = entry; // new entry is added to the end of the list
+        if (_cache.Count > maxSize) _cache.RemoveAt(0); // remove the least recently used item
+        if (entry.Expiration <= nowProvider())
+            _cache[key] = entry = new Entry(valueFactory(key), nowProvider() + timeToLive);
+        return entry.Value;
     }
 }
 
@@ -123,19 +109,16 @@ public class CacheEvolution6 : ICachedWeather {
     }
 }
 public class LruCache2<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ICacheWithExpiration<TKey, TValue> {
-    class Entry(TKey key) {
-        public readonly TKey key = key; // note that we need to store the key so we know what item to remove from the dictionary when we evict an item from the cache.
-        public TValue value;
-        public DateTime expiration;
-    }
+    // note that we need to store the key so we know what item to remove from the dictionary when we evict an item from the cache.
+    private readonly record struct Entry(TKey Key, TValue Value, DateTime Expiration);
     private readonly Dictionary<TKey, LinkedListNode<Entry>> _cache = new(comparer);
     private readonly LinkedList<Entry> _lru = new();
     public TValue Fetch(TKey key, Func<TKey, TValue> valueFactory, TimeSpan timeToLive) {
         if (!_cache.TryGetValue(key, out var node)) {
-            _cache[key] = node = new LinkedListNode<Entry>(new Entry(key));
+            _cache[key] = node = new LinkedListNode<Entry>(new Entry(key, default, default));
             _lru.AddFirst(node); // new entry is added to the head of the list
             if (_cache.Count > maxSize) {
-                _cache.Remove(_lru.Last.Value.key); // remove the least recently used item from the dictionary
+                _cache.Remove(_lru.Last.Value.Key); // remove the least recently used item from the dictionary
                 _lru.RemoveLast(); // remove the least recently used item from the linked list
             }
         } else {
@@ -143,11 +126,9 @@ public class LruCache2<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
             _lru.AddFirst(node); // move the item to the head of the list
         }
         Entry entry = node.Value;
-        if (entry.expiration <= nowProvider()) {
-            entry.value = valueFactory(key);
-            entry.expiration = nowProvider() + timeToLive;
-        }
-        return entry.value;
+        if (entry.Expiration <= nowProvider())
+            node.Value = entry = new Entry(entry.Key, valueFactory(entry.Key), nowProvider() + timeToLive);
+        return entry.Value;
     }
 }
 
@@ -160,7 +141,7 @@ public class CacheEvolution7 : ICachedWeather {
     }
 }
 public class LruCache3<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ICacheWithExpiration<TKey, TValue> {
-    class Entry(TKey key) {
+    private class Entry(TKey key) {
         public readonly TKey key = key;
         public TValue value;
         public DateTime expiration;
@@ -201,7 +182,7 @@ public class CacheEvolution8 : ICachedWeather {
     }
 }
 public class LruCache4<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ICacheWithExpiration<TKey, TValue> {
-    class Entry(TKey key) {
+    private class Entry(TKey key) {
         public readonly TKey key = key;
         public TValue value;
         public DateTime expiration;
@@ -263,7 +244,7 @@ public interface ILruCache<TKey, TValue> {
     void Clear();
 }
 public class LruCache5<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ILruCache<TKey, TValue> {
-    class Entry(TKey key) {
+    private class Entry(TKey key) {
         public readonly TKey key = key;
         public TValue value;
         public DateTime expiration;
@@ -299,8 +280,7 @@ public class LruCache5<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<Date
             TValue val = entry.value = valueFactory(key);
             entry.expiration = nowProvider() + timeToLive;
             return val;
-        }
-        finally {
+        } finally {
             entry.semaphore.Release();
         }
     }
@@ -361,7 +341,7 @@ public class CacheEvolution10 : ICachedWeatherValueAsync {
     }
 }
 public class LruCache6<TKey, TValue>(IEqualityComparer<TKey> comparer, Func<DateTime> nowProvider, int maxSize) : ILruCache10<TKey, TValue> {
-    class Entry(TKey key) {
+    private class Entry(TKey key) {
         public readonly TKey key = key;
         public TValue value;
         public long expiration; // Note we store the expiration time as a long rather than a DateTime.
